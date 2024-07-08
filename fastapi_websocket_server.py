@@ -5,6 +5,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from dotenv import load_dotenv
+import logging
 
 load_dotenv()
 
@@ -21,6 +22,10 @@ app.add_middleware(
 # Initialize OpenAI API key
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 def get_weather_forecast(location: str):
     appid = os.getenv("OPENWEATHER_API_KEY")
@@ -29,18 +34,20 @@ def get_weather_forecast(location: str):
         response = requests.get(url)
         if response.status_code == 200:
             data = response.json()
-            # Extract relevant weather information
-            temperature = data["current"]["temp_f"]
-
-            # Return the weather data
-            return {
-                "temperature": temperature
-            }
+            # Log the full response for debugging purposes
+            logger.info(f"API response: {data}")
+            if "current" in data and "temp_f" in data["current"]:
+                temperature = data["current"]["temp_f"]
+                return {"temperature": temperature}
+            else:
+                logger.error(f"Invalid API response: {data}")
+                return {"error": "Invalid API response"}
         else:
-            return {}
+            logger.error(f"Error fetching weather data: {response.status_code} - {response.text}")
+            return {"error": f"Error fetching weather data: {response.status_code}"}
     except requests.exceptions.RequestException as e:
-        print("Error occurred during API request:", e)
-        return {}
+        logger.error(f"Exception during API request: {e}")
+        return {"error": "Exception during API request"}
 
 
 def create_assistant_response(user_message):
@@ -60,17 +67,21 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
-            print('Received message:', data)
-            if "weather" in data.lower():
-                location = data.split()[-1]
+            logger.info(f'Received message: {data}')
+            if "weather" in data.lower() or "temperature" in data.lower():
+                # Extract location from the message
+                location = data.split(" in ")[-1].replace("?", "").strip()
                 forecast = get_weather_forecast(location)
-                reply = f"The current temperature in {location} is {forecast['temperature']}°F."
+                if "temperature" in forecast:
+                    reply = f"The current temperature in {location} is {forecast['temperature']}°F."
+                else:
+                    reply = "Sorry, I couldn't fetch the weather data."
             else:
                 reply = create_assistant_response(data)
 
             await websocket.send_text(reply)
     except WebSocketDisconnect:
-        print("Client disconnected")
+        logger.info("Client disconnected")
 
 
 @app.get("/")
